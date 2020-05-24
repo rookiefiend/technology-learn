@@ -1,0 +1,6 @@
+.vscode
+.idea
+.devcontainer
+__debug_bin
+vendor
+bin
