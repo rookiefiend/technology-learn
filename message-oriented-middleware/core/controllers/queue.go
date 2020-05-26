@@ -1,6 +1,8 @@
 package controllers
 
-import "fmt"
+import (
+	"fmt"
+)
 
 const (
 	defaultQueueSize = 100

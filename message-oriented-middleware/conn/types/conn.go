@@ -14,30 +14,29 @@ import (
 
 const (
 	maxReceiveCacheSize = 1024
-	ackTimeoutDuration  = 500 * time.Millisecond
+	ackTimeoutDuration  = 1 * time.Hour
 )
 
 // ReliableConn 可靠连接，确保发送的每个包都被连接的另一端所接收
 type ReliableConn struct {
-	idCursor            int64
-	idCursorMutex       sync.Mutex
-	waitAckPackage      map[int64]chan struct{}
-	waitAckPackageMutex sync.RWMutex
-	receiveDataCh       chan []byte
-	receiveDataCache    *bytes.Buffer
-	conn                net.Conn
-	stopCh              chan struct{}
-	isClose             bool
-	isCloseMutex        sync.Mutex
-	writeMutex          sync.Mutex
-	isWriting           bool
+	idCursor         int64
+	idCursorMutex    sync.Mutex
+	waitAckCh        chan struct{}
+	receiveDataCh    chan []byte
+	receiveDataCache *bytes.Buffer
+	conn             net.Conn
+	stopCh           chan struct{}
+	isClose          bool
+	isCloseMutex     sync.Mutex
+	writeMutex       sync.Mutex
+	isWriting        bool
 }
 
 // NewReliableConn ...
 func NewReliableConn(conn net.Conn) *ReliableConn {
 	rc := new(ReliableConn)
 	rc.conn = conn
-	rc.waitAckPackage = make(map[int64]chan struct{})
+	rc.waitAckCh = make(chan struct{})
 	rc.receiveDataCh = make(chan []byte, maxReceiveCacheSize)
 	rc.receiveDataCache = bytes.NewBuffer(nil)
 	rc.stopCh = make(chan struct{})
@@ -63,18 +62,16 @@ func (rc *ReliableConn) underlyingRead() {
 			rc.Close()
 			continue
 		}
+		dataBytes, err := ReadBytes(ctx, rc.conn, int(h.Length))
+		if err != nil {
+			logrus.WithField("length", h.Length).Errorf("failed to read bytes")
+			rc.Close()
+			continue
+		}
 		switch h.Tpy {
 		case AckPackageType:
-			rc.waitAckPackageMutex.RLock()
-			ch, ok := rc.waitAckPackage[h.Ack]
-			if !ok {
-				logrus.WithField("header", h).Errorf("accept unknown ack package")
-			} else {
-				ch <- struct{}{}
-			}
-			rc.waitAckPackageMutex.RUnlock()
+			rc.waitAckCh <- struct{}{}
 		case ReqPackageType:
-			dataBytes, err := ReadBytes(ctx, rc.conn, int(h.Length))
 			if err != nil {
 				logrus.WithField("conn", rc.conn).
 					WithField("length", h.Length).
@@ -133,6 +130,12 @@ func (rc *ReliableConn) Read(b []byte) (n int, err error) {
 				rc.receiveDataCache.Write(data[i:])
 				return rn, nil
 			}
+		default:
+			if rn == 0 {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			return rn, nil
 		}
 	}
 }
@@ -146,17 +149,6 @@ func (rc *ReliableConn) Write(b []byte) (rn int, err error) {
 		return 0, err
 	}
 
-	// 存储等待信道
-	ch := make(chan struct{})
-	rc.waitAckPackageMutex.Lock()
-	rc.waitAckPackage[rc.idCursor] = ch
-	rc.waitAckPackageMutex.Unlock()
-	defer func() {
-		//  退出前清理等待信道
-		rc.waitAckPackageMutex.Lock()
-		delete(rc.waitAckPackage, rc.idCursor)
-		rc.waitAckPackageMutex.Unlock()
-	}()
 	n, err := rc.conn.Write(pkgBytes)
 	if err != nil {
 		return 0, err
@@ -169,7 +161,7 @@ func (rc *ReliableConn) Write(b []byte) (rn int, err error) {
 		return 0, fmt.Errorf("write byte to closed conn")
 	case <-timer.C:
 		return 0, fmt.Errorf("wait ack package timeout")
-	case <-ch:
+	case <-rc.waitAckCh:
 		return n - HeaderLength, nil
 	}
 }

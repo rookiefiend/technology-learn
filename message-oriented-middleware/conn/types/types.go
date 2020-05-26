@@ -90,8 +90,8 @@ func (p *Package) UnmarshalBytes(data []byte) error {
 }
 
 // ReceiveHeader ...
-func ReceiveHeader(ctx context.Context, conn net.Conn) (Header, error) {
-	h := Header{}
+func ReceiveHeader(ctx context.Context, conn net.Conn) (*Header, error) {
+	h := new(Header)
 	headerBytes, err := ReadBytes(ctx, conn, HeaderLength)
 	if err != nil {
 		logrus.WithField("conn", conn).WithField("length", HeaderLength).
@@ -113,6 +113,9 @@ func ReadBytes(ctx context.Context, conn net.Conn, length int) ([]byte, error) {
 		n       int
 		err     error
 	)
+	if length <= 0 {
+		return nil, nil
+	}
 	bodyBytes := make([]byte, length)
 	bodyBytesT := bodyBytes
 	for {

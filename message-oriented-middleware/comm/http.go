@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+var (
+	DefaultReliableTransport = NewReliableTransport()
+)
+
 type ReliableTransport struct {
 	http.Transport
 }
