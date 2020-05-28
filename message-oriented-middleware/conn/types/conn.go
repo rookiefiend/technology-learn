@@ -14,14 +14,14 @@ import (
 
 const (
 	maxReceiveCacheSize = 1024
-	ackTimeoutDuration  = 1 * time.Hour
+	ackTimeoutDuration  = 100 * time.Hour
 )
 
 // ReliableConn 可靠连接，确保发送的每个包都被连接的另一端所接收
 type ReliableConn struct {
 	idCursor         int64
 	idCursorMutex    sync.Mutex
-	waitAckCh        chan struct{}
+	waitAckCh        chan int64
 	receiveDataCh    chan []byte
 	receiveDataCache *bytes.Buffer
 	conn             net.Conn
@@ -36,7 +36,7 @@ type ReliableConn struct {
 func NewReliableConn(conn net.Conn) *ReliableConn {
 	rc := new(ReliableConn)
 	rc.conn = conn
-	rc.waitAckCh = make(chan struct{})
+	rc.waitAckCh = make(chan int64)
 	rc.receiveDataCh = make(chan []byte, maxReceiveCacheSize)
 	rc.receiveDataCache = bytes.NewBuffer(nil)
 	rc.stopCh = make(chan struct{})
@@ -64,21 +64,14 @@ func (rc *ReliableConn) underlyingRead() {
 		}
 		dataBytes, err := ReadBytes(ctx, rc.conn, int(h.Length))
 		if err != nil {
-			logrus.WithField("length", h.Length).Errorf("failed to read bytes")
+			logrus.WithField("length", h.Length).Errorf("failed to read data bytes")
 			rc.Close()
 			continue
 		}
 		switch h.Tpy {
 		case AckPackageType:
-			rc.waitAckCh <- struct{}{}
+			rc.waitAckCh <- h.Ack
 		case ReqPackageType:
-			if err != nil {
-				logrus.WithField("conn", rc.conn).
-					WithField("length", h.Length).
-					Errorf("failed to read bytes form conn, error = %v", err)
-				rc.Close()
-				continue
-			}
 			ackPkg := NewPackage(0, AckPackageType, h.Id, nil)
 			ackPkgBytes, err := ackPkg.MarshalBytes()
 			if err != nil {
@@ -144,6 +137,7 @@ func (rc *ReliableConn) Write(b []byte) (rn int, err error) {
 	rc.writeMutex.Lock()
 	defer rc.writeMutex.Unlock()
 	pkg := NewPackage(rc.idCursor, ReqPackageType, 0, b)
+	rc.idCursor++
 	pkgBytes, err := pkg.MarshalBytes()
 	if err != nil {
 		return 0, err
@@ -156,13 +150,18 @@ func (rc *ReliableConn) Write(b []byte) (rn int, err error) {
 
 	timer := time.NewTimer(ackTimeoutDuration)
 	defer timer.Stop()
-	select {
-	case <-rc.stopCh:
-		return 0, fmt.Errorf("write byte to closed conn")
-	case <-timer.C:
-		return 0, fmt.Errorf("wait ack package timeout")
-	case <-rc.waitAckCh:
-		return n - HeaderLength, nil
+	for {
+		select {
+		case <-rc.stopCh:
+			return 0, fmt.Errorf("not accept ack package, conn has been close, bytes = %s", b)
+		case <-timer.C:
+			return 0, fmt.Errorf("wait ack package timeout, bytes = %s", b)
+		case ackId := <-rc.waitAckCh:
+			if ackId != pkg.Header.Id {
+				continue
+			}
+			return n - HeaderLength, nil
+		}
 	}
 }
 
@@ -174,6 +173,7 @@ func (rc *ReliableConn) Close() error {
 	}
 	close(rc.stopCh)
 	rc.isClose = true
+	rc.conn.Close()
 	return nil
 }
 
@@ -186,13 +186,13 @@ func (rc *ReliableConn) RemoteAddr() net.Addr {
 }
 
 func (rc *ReliableConn) SetDeadline(t time.Time) error {
-	return rc.conn.SetDeadline(t)
+	return nil
 }
 
 func (rc *ReliableConn) SetReadDeadline(t time.Time) error {
-	return rc.conn.SetReadDeadline(t)
+	return nil
 }
 
 func (rc *ReliableConn) SetWriteDeadline(t time.Time) error {
-	return rc.conn.SetWriteDeadline(t)
+	return nil
 }

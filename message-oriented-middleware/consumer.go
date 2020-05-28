@@ -20,6 +20,7 @@ func main() {
 			Errorf("failed to registry dset name, error = %v", err)
 		return
 	}
+	logrus.Infof("success registry dest name")
 
 	for {
 

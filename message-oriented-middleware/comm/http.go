@@ -31,33 +31,41 @@ func NewReliableTransport() *ReliableTransport {
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+		TLSHandshakeTimeout:   0,
+		ExpectContinueTimeout: 0,
 	}
 	return &ReliableTransport{tr}
 }
 
 type ReliableListener struct {
-	net.Listener
+	listener net.Listener
 }
 
-func NewReliableListener(network, addr string) (*ReliableListener, error) {
-	var err error
-	rl := new(ReliableListener)
-	rl.Listener, err = net.Listen(network, addr)
-	if err != nil {
-		return nil, err
-	}
-	return rl, nil
+func (rl *ReliableListener) Close() error {
+	return rl.listener.Close()
+}
+
+func (rl *ReliableListener) Addr() net.Addr {
+	return rl.listener.Addr()
 }
 
 func (rl *ReliableListener) Accept() (net.Conn, error) {
-	conn, err := rl.Listener.Accept()
+	conn, err := rl.listener.Accept()
 	if err != nil {
 		return nil, err
 	}
 	conn = types.NewReliableConn(conn)
 	return conn, nil
+}
+
+func NewReliableListener(network, addr string) (*ReliableListener, error) {
+	var err error
+	rl := new(ReliableListener)
+	rl.listener, err = net.Listen(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	return rl, nil
 }
 
 // ResponseData ...

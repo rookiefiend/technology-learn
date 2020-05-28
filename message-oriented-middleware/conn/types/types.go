@@ -95,7 +95,7 @@ func ReceiveHeader(ctx context.Context, conn net.Conn) (*Header, error) {
 	headerBytes, err := ReadBytes(ctx, conn, HeaderLength)
 	if err != nil {
 		logrus.WithField("conn", conn).WithField("length", HeaderLength).
-			Errorf("failed to read bytes, error = %v", err)
+			Errorf("failed to read header bytes, error = %v", err)
 		return h, err
 	}
 
@@ -129,18 +129,19 @@ func ReadBytes(ctx context.Context, conn net.Conn, length int) ([]byte, error) {
 		readLen += n
 		if err != nil {
 			if err == io.EOF && readLen == length {
-				break
+				return bodyBytes, nil
 			}
 			logrus.WithField("conn", conn).
+				WithField("readLen", readLen).
+				WithField("length", length).
 				Errorf("failed to read bytes, error = %v", err)
 			return nil, err
 		}
 		if readLen == length {
-			break
+			return bodyBytes, nil
 		}
 		bodyBytesT = bodyBytesT[n:]
 	}
-	return bodyBytes, nil
 }
 
 var (

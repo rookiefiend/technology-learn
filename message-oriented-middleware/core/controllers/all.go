@@ -17,13 +17,14 @@ const (
 
 var (
 	ConsumeQueueMap = QueueMap{
-		keyMQueue: make(map[string]Queue),
+		keyMQueue: make(map[string]*Queue),
 		mutex:     sync.RWMutex{},
 	}
 )
 
 // 消费者注册函数
 var Registry http.HandlerFunc = func(writer http.ResponseWriter, request *http.Request) {
+	logrus.Infof("accept registry request")
 	defer request.Body.Close()
 	v := new(RegistryReq)
 	err := json.NewDecoder(request.Body).Decode(v)
@@ -33,7 +34,7 @@ var Registry http.HandlerFunc = func(writer http.ResponseWriter, request *http.R
 		})
 		return
 	}
-	ConsumeQueueMap.Add(v.DestName, NewQueue())
+	ConsumeQueueMap.Add(v.DestName, NewQueue(10))
 	ServeJSON(writer, http.StatusOK, comm.ResponseData{
 		Msg: "registry success",
 	})
@@ -41,6 +42,7 @@ var Registry http.HandlerFunc = func(writer http.ResponseWriter, request *http.R
 
 // 消费者消费函数
 var Consume http.HandlerFunc = func(writer http.ResponseWriter, request *http.Request) {
+	logrus.Infof("accept consume request")
 	defer request.Body.Close()
 	v := new(ConsumeReq)
 	err := json.NewDecoder(request.Body).Decode(v)
@@ -59,15 +61,21 @@ var Consume http.HandlerFunc = func(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
-	ServeJSON(writer, http.StatusOK, comm.ResponseData{
+	err = ServeJSON(writer, http.StatusOK, comm.ResponseData{
 		Msg:  "consume msg success",
 		Data: ConsumeResp{Msg: queue.Get()},
 	})
+	if err != nil {
+		queue.Done()
+	} else {
+		queue.Forget()
+	}
 }
 
 // 生产者生产函数
 var Product http.HandlerFunc = func(writer http.ResponseWriter, request *http.Request) {
 	defer request.Body.Close()
+	logrus.Infof("accept product request")
 	v := new(ProductReq)
 	err := json.NewDecoder(request.Body).Decode(v)
 	if err != nil {
@@ -84,7 +92,7 @@ var Product http.HandlerFunc = func(writer http.ResponseWriter, request *http.Re
 		})
 		return
 	}
-	err = queue.Add(v.Msg)
+	err = queue.Put(v.Msg)
 	if err != nil {
 		ServeJSON(writer, http.StatusInternalServerError, comm.ResponseData{
 			Err: err.Error(),
@@ -98,20 +106,19 @@ var Product http.HandlerFunc = func(writer http.ResponseWriter, request *http.Re
 }
 
 // ServeJSON ...
-func ServeJSON(write http.ResponseWriter, code int, data comm.ResponseData) {
+func ServeJSON(write http.ResponseWriter, code int, data comm.ResponseData) error {
 	write.Header().Set("Content-Type", "application/json; charset=utf-8")
 	write.WriteHeader(code)
 
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		logrus.WithField("data", data).Errorf("failed to marshal response data")
-		return
+		return err
 	}
-	for {
-		_, err = write.Write(dataJSON)
-		if err != nil {
-			logrus.Errorf("failed to write json resp [%s], error = %v", dataJSON, err)
-			time.Sleep(defaultRetryInternal)
-		}
+	_, err = write.Write(dataJSON)
+	if err != nil {
+		logrus.Errorf("failed to write json resp [%s], error = %v", dataJSON, err)
+		return err
 	}
+	return nil
 }

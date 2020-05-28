@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"technology/message-oriented-middleware/comm"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Client struct {
@@ -19,6 +22,7 @@ func NewClient(addr string) *Client {
 		schema: "http",
 		addr:   addr,
 		httpClient: http.Client{
+			Timeout:   0,
 			Transport: comm.DefaultReliableTransport,
 		},
 	}
@@ -41,9 +45,15 @@ func (c Client) RegistryDestName(req RegistryDestNameReq) error {
 	}
 	defer resp.Body.Close()
 
-	respData := new(comm.ResponseData)
-	err = json.NewDecoder(resp.Body).Decode(respData)
+	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
+		logrus.Errorf("failed to read all body from registry resp, error = %v", err)
+		return err
+	}
+	respData := new(comm.ResponseData)
+	err = json.Unmarshal(respBody, respData)
+	if err != nil {
+		logrus.Errorf("failed to unmarshal resp Body [%s] to respData %#v, error = %v", respBody, respData, err)
 		return err
 	}
 
@@ -72,10 +82,17 @@ func (c Client) Consume(req ConsumeReq) (*ConsumeResp, error) {
 	}
 	defer resp.Body.Close()
 
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		logrus.Errorf("failed to read all body from consume resp, error = %v", err)
+		return nil, err
+	}
+
 	respData := new(comm.ResponseData)
 	respData.Data = consumeResp
-	err = json.NewDecoder(resp.Body).Decode(respData)
+	err = json.Unmarshal(respBody, respData)
 	if err != nil {
+		logrus.Errorf("failed to unmarshal resp Body [%s] to respData %#v, error = %v", respBody, respData, err)
 		return consumeResp, err
 	}
 
@@ -107,9 +124,16 @@ func (c Client) Product(req ProductReq) error {
 	}
 	defer resp.Body.Close()
 
-	respData := new(comm.ResponseData)
-	err = json.NewDecoder(resp.Body).Decode(respData)
+	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
+		logrus.Errorf("failed to read all body from product resp, error = %v", err)
+		return err
+	}
+
+	respData := new(comm.ResponseData)
+	err = json.Unmarshal(respBody, respData)
+	if err != nil {
+		logrus.Errorf("failed to unmarshal resp body [%s] to respData %#v, error = %v", respBody, respData, err)
 		return err
 	}
 
